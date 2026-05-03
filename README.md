@@ -4,6 +4,8 @@ Study is a source-linked learning workspace for building courses, writing struct
 
 The app is currently an MVP frontend with rich local demo data, a complete Supabase schema scaffold, and a safe AI suggestion function scaffold. It is designed so the local demo repository can later be replaced by Supabase-backed repositories without rewriting the product surface.
 
+For the original long-form product and architecture plan, see [docs/initial-product-plan.md](docs/initial-product-plan.md).
+
 ## Current Status
 
 Implemented:
@@ -20,12 +22,12 @@ Implemented:
   - Analytics
   - Import
   - Export
-- VS Code-inspired content workspace:
-  - left course explorer
-  - central block editor
-  - breadcrumb-like course context
-  - outline panel
-  - density/minimap rail
+- Codespaces-inspired content workspace:
+  - single editor-like content surface without a separate course tree pane
+  - inline course headings backed by the structured course hierarchy
+  - compact search, current-location, and jump-to-heading toolbar
+  - monospaced block editor with a quiet numbering gutter
+  - text-like minimap rail with density stripes and semantic markers
   - collapsible heading blocks
   - block-level appendix linking
   - AI flashcard suggestion trigger
@@ -462,7 +464,7 @@ Simplified for now:
 - local demo persistence instead of full Supabase repositories
 - block-level linking as the primary working link model
 - exact text anchors exist in data but advanced repair UI is not complete
-- simple outline/minimap rather than full VS Code minimap
+- text-like minimap rail rather than exact glyph-level VS Code minimap
 - simple import/export
 - simple spaced repetition
 - AI suggestions rather than autonomous AI edits
@@ -490,6 +492,7 @@ Phase 3:
 - mock exams and generated quizzes
 - FSRS-style scheduling
 - readiness forecast with mastery decay
+- glyph-level minimap rendering and viewport sync
 - advanced multilingual workflows
 - full PDF/Word export
 - collaboration
