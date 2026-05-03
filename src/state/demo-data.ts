@@ -9,6 +9,7 @@ import type {
   AppendixTableType,
   Asset,
   ContentBlock,
+  ContentBlockVersion,
   ContentBlockType,
   ContentTextAnchor,
   Course,
@@ -24,6 +25,9 @@ import type {
   ReviewSession,
   Source,
   StudyData,
+  StudySchedule,
+  Tag,
+  Tagging,
 } from "@/domain/types"
 
 const profileId = "profile_demo"
@@ -2459,6 +2463,7 @@ const bundles = courseSeeds.map(buildCourse)
 const courses = bundles.map((bundle) => bundle.course)
 const courseNodes = bundles.flatMap((bundle) => bundle.nodes)
 const contentBlocks = bundles.flatMap((bundle) => bundle.blocks)
+const contentBlockVersions: ContentBlockVersion[] = []
 const contentTextAnchors = bundles.flatMap((bundle) => bundle.anchors)
 const appendixTables = bundles.flatMap((bundle) => bundle.tables)
 const appendixFields = bundles.flatMap((bundle) => bundle.fields)
@@ -2471,6 +2476,9 @@ const flashcardSources = bundles.flatMap((bundle) => bundle.flashcardSources)
 const entityLinks = bundles.flatMap((bundle) => bundle.entityLinks)
 const aiSuggestions = bundles.flatMap((bundle) => bundle.suggestions)
 const aiSuggestionTargets = bundles.flatMap((bundle) => bundle.suggestionTargets)
+const studySchedules: StudySchedule[] = []
+const tags: Tag[] = []
+const taggings: Tagging[] = []
 const reviewData = makeReviewData(courses, flashcards)
 const metrics = computeMetrics(courses, contentBlocks, appendixRecords, flashcards, flashcardSources)
 
@@ -2479,6 +2487,7 @@ export const defaultStudyData: StudyData = {
   courses,
   courseNodes,
   contentBlocks,
+  contentBlockVersions,
   contentTextAnchors,
   appendixTables,
   appendixFields,
@@ -2490,8 +2499,11 @@ export const defaultStudyData: StudyData = {
   flashcardSources,
   reviewSessions: reviewData.sessions,
   reviewAttempts: reviewData.attempts,
+  studySchedules,
   aiSuggestions,
   aiSuggestionTargets,
   entityLinks,
+  tags,
+  taggings,
   metrics,
 }

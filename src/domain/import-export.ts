@@ -1,7 +1,12 @@
 import { uid } from "@/lib/utils"
 import type { ContentBlock, Course, CourseNode, StudyData } from "./types"
 
-export function splitPastedText(text: string, course: Course, node: CourseNode): ContentBlock[] {
+export function splitPastedText(
+  text: string,
+  course: Course,
+  node: CourseNode,
+  idFactory: (prefix: string) => string = uid,
+): ContentBlock[] {
   const lines = text
     .split(/\n+/)
     .map((line) => line.trim())
@@ -14,7 +19,7 @@ export function splitPastedText(text: string, course: Course, node: CourseNode):
     const plainText = line.replace(/^#{1,6}\s+/, "").replace(/^\d+(\.\d+)*\s+/, "")
 
     return {
-      id: uid("block"),
+      id: idFactory("block"),
       courseId: course.id,
       nodeId: node.id,
       blockType: isHeading ? "heading" : "paragraph",
@@ -44,14 +49,39 @@ export function exportCourseJson(data: StudyData, courseId: string) {
       course,
       courseNodes: data.courseNodes.filter((item) => item.courseId === courseId),
       contentBlocks: data.contentBlocks.filter((item) => item.courseId === courseId),
+      contentBlockVersions: data.contentBlockVersions.filter((version) =>
+        data.contentBlocks.some((block) => block.courseId === courseId && block.id === version.contentBlockId),
+      ),
+      contentTextAnchors: data.contentTextAnchors.filter((item) => item.courseId === courseId),
       appendixTables: data.appendixTables.filter((item) => item.courseId === courseId),
+      appendixFields: data.appendixFields.filter((field) =>
+        data.appendixTables.some((table) => table.courseId === courseId && table.id === field.appendixTableId),
+      ),
       appendixRecords: data.appendixRecords.filter((item) => item.courseId === courseId),
+      appendixRecordValues: data.appendixRecordValues.filter((value) =>
+        data.appendixRecords.some((record) => record.courseId === courseId && record.id === value.appendixRecordId),
+      ),
       sources: data.sources.filter((item) => item.courseId === courseId),
+      assets: data.assets.filter((item) => item.courseId === courseId),
       flashcards: data.flashcards.filter((item) => item.courseId === courseId),
       flashcardSources: data.flashcardSources.filter((source) =>
         data.flashcards.some((card) => card.courseId === courseId && card.id === source.flashcardId),
       ),
+      reviewSessions: data.reviewSessions.filter((item) => item.courseId === courseId),
+      reviewAttempts: data.reviewAttempts.filter((attempt) =>
+        data.flashcards.some((card) => card.courseId === courseId && card.id === attempt.flashcardId),
+      ),
+      studySchedules: data.studySchedules.filter((item) => item.courseId === courseId),
+      aiSuggestions: data.aiSuggestions.filter((item) => item.courseId === courseId),
+      aiSuggestionTargets: data.aiSuggestionTargets.filter((target) =>
+        data.aiSuggestions.some((suggestion) => suggestion.courseId === courseId && suggestion.id === target.aiSuggestionId),
+      ),
       entityLinks: data.entityLinks.filter((item) => item.courseId === courseId),
+      tags: data.tags.filter((item) => item.courseId === courseId),
+      taggings: data.taggings.filter((tagging) =>
+        data.tags.some((tag) => tag.courseId === courseId && tag.id === tagging.tagId),
+      ),
+      metrics: data.metrics.filter((item) => item.courseId === courseId),
       exportedAt: new Date().toISOString(),
       schemaVersion: "0.1.0",
     },

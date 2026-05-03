@@ -1,3 +1,4 @@
+import type { Session, User } from "@supabase/supabase-js"
 import {
   createContext,
   type ReactNode,
@@ -5,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react"
 import { splitPastedText } from "@/domain/import-export"
@@ -12,9 +14,11 @@ import { displayNumber, makeNumberingPath } from "@/domain/numbering"
 import { isDue, isWeak, scheduleReview } from "@/domain/review"
 import type {
   AiSuggestion,
+  AiSuggestionTarget,
   AppendixRecord,
   AppendixTable,
   ContentBlock,
+  ContentBlockVersion,
   Course,
   CourseMetrics,
   CourseNode,
@@ -29,12 +33,21 @@ import type {
   ReviewSession,
   StudyData,
 } from "@/domain/types"
+import { isSupabaseConfigured, supabase } from "@/lib/supabase"
 import { slugify, uid } from "@/lib/utils"
 import { defaultStudyData } from "./demo-data"
+import {
+  loadSupabaseStudyData,
+  upsertSupabaseStudyPatch,
+  type SupabaseStudyPatch,
+} from "./supabase-study-repository"
 
 const storageKey = "study.mvp.data"
 const seedVersionKey = "study.mvp.seedVersion"
+const modeKey = "study.mvp.mode"
 const demoSeedVersion = "2026-05-expanded-demo"
+
+type StudyWorkspaceMode = "demo" | "live"
 
 interface CreateCourseInput {
   title: string
@@ -77,32 +90,114 @@ interface AddFlashcardInput {
 
 interface StudyDataContextValue {
   data: StudyData
-  resetDemoData: () => void
-  createCourse: (input: CreateCourseInput) => Course
-  updateCourse: (courseId: string, patch: Partial<Course>) => void
-  addCourseNode: (courseId: string, parentId: string | undefined, nodeType: CourseNodeType, title: string) => CourseNode
-  addContentBlock: (input: AddBlockInput) => ContentBlock
-  updateContentBlock: (blockId: string, text: string) => void
-  toggleBlockCollapse: (blockId: string) => void
-  importTextToNode: (courseId: string, nodeId: string, text: string) => number
-  addAppendixTable: (courseId: string, name: string) => AppendixTable
-  addAppendixRecord: (input: AddAppendixRecordInput) => AppendixRecord
-  linkContentToAppendix: (courseId: string, blockId: string, recordId: string) => EntityLink
-  addFlashcard: (input: AddFlashcardInput) => Flashcard
-  reviewFlashcard: (courseId: string, cardId: string, rating: ReviewRating, answerText: string) => void
-  createAiFlashcardSuggestion: (courseId: string, targetId: string, targetType: "content_block" | "appendix_record") => AiSuggestion
-  resolveSuggestion: (suggestionId: string, status: AiSuggestion["status"]) => void
+  mode: StudyWorkspaceMode
+  isLiveMode: boolean
+  isLoading: boolean
+  authReady: boolean
+  pendingMutations: number
+  lastError: string | null
+  user: User | null
+  session: Session | null
+  activateDemoWorkspace: () => void
+  activateLiveWorkspace: () => void
+  signInWithPassword: (email: string, password: string) => Promise<Session | null>
+  signUpWithPassword: (email: string, password: string) => Promise<Session | null>
+  signOut: () => Promise<void>
+  reload: () => Promise<void>
+  resetDemoData: () => Promise<void>
+  createCourse: (input: CreateCourseInput) => Promise<Course>
+  updateCourse: (courseId: string, patch: Partial<Course>) => Promise<void>
+  addCourseNode: (courseId: string, parentId: string | undefined, nodeType: CourseNodeType, title: string) => Promise<CourseNode>
+  addContentBlock: (input: AddBlockInput) => Promise<ContentBlock>
+  updateContentBlock: (blockId: string, text: string) => Promise<void>
+  toggleBlockCollapse: (blockId: string) => Promise<void>
+  importTextToNode: (courseId: string, nodeId: string, text: string) => Promise<number>
+  addAppendixTable: (courseId: string, name: string) => Promise<AppendixTable>
+  addAppendixRecord: (input: AddAppendixRecordInput) => Promise<AppendixRecord>
+  linkContentToAppendix: (courseId: string, blockId: string, recordId: string) => Promise<EntityLink>
+  addFlashcard: (input: AddFlashcardInput) => Promise<Flashcard>
+  reviewFlashcard: (courseId: string, cardId: string, rating: ReviewRating, answerText: string) => Promise<void>
+  createAiFlashcardSuggestion: (
+    courseId: string,
+    targetId: string,
+    targetType: "content_block" | "appendix_record",
+  ) => Promise<AiSuggestion>
+  resolveSuggestion: (suggestionId: string, status: AiSuggestion["status"]) => Promise<void>
+}
+
+interface MutationBuild<T> {
+  data: StudyData
+  result: T
+  patch?: SupabaseStudyPatch
+  metricCourseIds?: string[]
+}
+
+interface SuggestionCardPayload {
+  cardType?: Flashcard["cardType"]
+  prompt?: string
+  answer?: string
+  sourceTargetType?: FlashcardSource["sourceTargetType"]
+  sourceTargetId?: string
 }
 
 const StudyDataContext = createContext<StudyDataContextValue | null>(null)
 
+function normalizeStudyData(data: StudyData): StudyData {
+  return {
+    ...data,
+    contentBlockVersions: data.contentBlockVersions ?? [],
+    contentTextAnchors: data.contentTextAnchors ?? [],
+    appendixFields: data.appendixFields ?? [],
+    appendixRecordValues: data.appendixRecordValues ?? [],
+    sources: data.sources ?? [],
+    assets: data.assets ?? [],
+    reviewSessions: data.reviewSessions ?? [],
+    reviewAttempts: data.reviewAttempts ?? [],
+    studySchedules: data.studySchedules ?? [],
+    aiSuggestions: data.aiSuggestions ?? [],
+    aiSuggestionTargets: data.aiSuggestionTargets ?? [],
+    entityLinks: data.entityLinks ?? [],
+    tags: data.tags ?? [],
+    taggings: data.taggings ?? [],
+    metrics: data.metrics ?? [],
+  }
+}
+
+function emptyStudyData(profileId: string): StudyData {
+  return {
+    profileId,
+    courses: [],
+    courseNodes: [],
+    contentBlocks: [],
+    contentBlockVersions: [],
+    contentTextAnchors: [],
+    appendixTables: [],
+    appendixFields: [],
+    appendixRecords: [],
+    appendixRecordValues: [],
+    sources: [],
+    assets: [],
+    flashcards: [],
+    flashcardSources: [],
+    reviewSessions: [],
+    reviewAttempts: [],
+    studySchedules: [],
+    aiSuggestions: [],
+    aiSuggestionTargets: [],
+    entityLinks: [],
+    tags: [],
+    taggings: [],
+    metrics: [],
+  }
+}
+
 function safeParseData(value: string | null): StudyData {
-  if (!value) return defaultStudyData
+  if (!value) return normalizeStudyData(defaultStudyData)
 
   try {
-    return JSON.parse(value) as StudyData
+    return normalizeStudyData(JSON.parse(value) as StudyData)
   } catch {
-    return defaultStudyData
+    return normalizeStudyData(defaultStudyData)
   }
 }
 
@@ -112,13 +207,23 @@ function loadInitialStudyData(): StudyData {
   if (storedSeedVersion !== demoSeedVersion) {
     localStorage.setItem(seedVersionKey, demoSeedVersion)
     localStorage.setItem(storageKey, JSON.stringify(defaultStudyData))
-    return defaultStudyData
+    return normalizeStudyData(defaultStudyData)
   }
 
   return safeParseData(localStorage.getItem(storageKey))
 }
 
-function createDefaultAppendixTables(courseId: string): AppendixTable[] {
+function initialWorkspaceMode(): StudyWorkspaceMode {
+  if (!isSupabaseConfigured) return "demo"
+  return localStorage.getItem(modeKey) === "demo" ? "demo" : "live"
+}
+
+function makeId(mode: StudyWorkspaceMode, prefix: string) {
+  if (mode === "live") return crypto.randomUUID()
+  return uid(prefix)
+}
+
+function createDefaultAppendixTables(courseId: string, idFactory: (prefix: string) => string): AppendixTable[] {
   const defaults: Array<[AppendixTable["name"], AppendixTable["tableType"], string]> = [
     ["Images", "images", "Structured images used inline or as study references."],
     ["Persons", "persons", "People, authors, rulers, and historical actors."],
@@ -128,7 +233,7 @@ function createDefaultAppendixTables(courseId: string): AppendixTable[] {
   ]
 
   return defaults.map(([name, tableType, description], index) => ({
-    id: uid("table"),
+    id: idFactory("table"),
     courseId,
     name,
     slug: slugify(name),
@@ -141,17 +246,17 @@ function createDefaultAppendixTables(courseId: string): AppendixTable[] {
   }))
 }
 
-function createInitialNodes(course: Course): CourseNode[] {
+function createInitialNodes(course: Course, idFactory: (prefix: string) => string): CourseNode[] {
   const timestamp = new Date().toISOString()
   const modulePath = makeNumberingPath([], 0, 1)
   const chapterPath = makeNumberingPath(modulePath, 1, 1)
   const sectionPath = makeNumberingPath(chapterPath, 2, 1)
   const subsectionPath = makeNumberingPath(sectionPath, 3, 1)
 
-  const moduleId = uid("node")
-  const chapterId = uid("node")
-  const sectionId = uid("node")
-  const subsectionId = uid("node")
+  const moduleId = idFactory("node")
+  const chapterId = idFactory("node")
+  const sectionId = idFactory("node")
+  const subsectionId = idFactory("node")
 
   return [
     {
@@ -258,347 +363,683 @@ function recalculateMetrics(data: StudyData): StudyData {
   return { ...data, metrics }
 }
 
+function metricPatch(data: StudyData, courseIds: string[] = []) {
+  if (courseIds.length === 0) return []
+  const ids = new Set(courseIds)
+  return data.metrics.filter((metric) => ids.has(metric.courseId))
+}
+
+function getSuggestionCardPayloads(suggestion: AiSuggestion): SuggestionCardPayload[] {
+  const cards = suggestion.payload.cards
+  if (!Array.isArray(cards)) return []
+
+  return cards
+    .filter((card): card is Record<string, unknown> => Boolean(card) && typeof card === "object" && !Array.isArray(card))
+    .map((card) => ({
+      cardType:
+        card.cardType === "definition" ||
+        card.cardType === "cloze" ||
+        card.cardType === "true_false" ||
+        card.cardType === "person" ||
+        card.cardType === "image" ||
+        card.cardType === "basic"
+          ? card.cardType
+          : undefined,
+      prompt: typeof card.prompt === "string" ? card.prompt : undefined,
+      answer: typeof card.answer === "string" ? card.answer : undefined,
+      sourceTargetType:
+        card.sourceTargetType === "content_block" ||
+        card.sourceTargetType === "text_anchor" ||
+        card.sourceTargetType === "appendix_record" ||
+        card.sourceTargetType === "source" ||
+        card.sourceTargetType === "asset"
+          ? card.sourceTargetType
+          : undefined,
+      sourceTargetId: typeof card.sourceTargetId === "string" ? card.sourceTargetId : undefined,
+    }))
+}
+
+function toErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unexpected error"
+}
+
 export function StudyDataProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<StudyData>(() => loadInitialStudyData())
+  const [mode, setMode] = useState<StudyWorkspaceMode>(() => initialWorkspaceMode())
+  const [session, setSession] = useState<Session | null>(null)
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured)
+  const [isLoading, setIsLoading] = useState(mode === "live")
+  const [pendingMutations, setPendingMutations] = useState(0)
+  const [lastError, setLastError] = useState<string | null>(null)
+  const [data, setData] = useState<StudyData>(() => (mode === "demo" ? loadInitialStudyData() : emptyStudyData("")))
+  const dataRef = useRef(data)
+  const modeRef = useRef(mode)
+  const sessionRef = useRef(session)
+  const persistQueueRef = useRef(Promise.resolve())
 
   useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify(data))
+    dataRef.current = data
   }, [data])
 
-  const mutate = useCallback((updater: (current: StudyData) => StudyData) => {
-    setData((current) => recalculateMetrics(updater(current)))
+  useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
+
+  useEffect(() => {
+    sessionRef.current = session
+  }, [session])
+
+  const setWorkspaceMode = useCallback((nextMode: StudyWorkspaceMode) => {
+    localStorage.setItem(modeKey, nextMode)
+    modeRef.current = nextMode
+    setMode(nextMode)
   }, [])
 
-  const resetDemoData = useCallback(() => {
-    localStorage.setItem(seedVersionKey, demoSeedVersion)
-    setData(defaultStudyData)
+  const runOperation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    setPendingMutations((count) => count + 1)
+    try {
+      const result = await operation()
+      setLastError(null)
+      return result
+    } catch (error) {
+      const message = toErrorMessage(error)
+      setLastError(message)
+      throw error
+    } finally {
+      setPendingMutations((count) => Math.max(0, count - 1))
+    }
   }, [])
+
+  const persistPatch = useCallback(async (patch: SupabaseStudyPatch) => {
+    if (modeRef.current !== "live") return
+    if (!supabase) throw new Error("Supabase is not configured")
+    await upsertSupabaseStudyPatch(supabase, patch)
+  }, [])
+
+  const commitMutation = useCallback(
+    async <T,>(
+      builder: (current: StudyData, idFactory: (prefix: string) => string) => MutationBuild<T>,
+    ): Promise<T> => {
+      const current = dataRef.current
+      const activeMode = modeRef.current
+      const idFactory = (prefix: string) => makeId(activeMode, prefix)
+      const mutation = builder(current, idFactory)
+      const nextData = recalculateMetrics(normalizeStudyData(mutation.data))
+      const metrics = metricPatch(nextData, mutation.metricCourseIds)
+      const patch: SupabaseStudyPatch = {
+        ...(mutation.patch ?? {}),
+        metrics: [...(mutation.patch?.metrics ?? []), ...metrics],
+      }
+
+      dataRef.current = nextData
+      setData(nextData)
+
+      await runOperation(async () => {
+        if (modeRef.current !== "live") {
+          await persistPatch(patch)
+          return
+        }
+
+        const queuedWrite = persistQueueRef.current.catch(() => undefined).then(() => persistPatch(patch))
+        persistQueueRef.current = queuedWrite.then(
+          () => undefined,
+          () => undefined,
+        )
+        await queuedWrite
+      })
+
+      return mutation.result
+    },
+    [persistPatch, runOperation],
+  )
+
+  const loadLiveData = useCallback(async () => {
+    if (modeRef.current !== "live" || !sessionRef.current?.user.id) return
+    if (!supabase) throw new Error("Supabase is not configured")
+    const loaded = await loadSupabaseStudyData(supabase, sessionRef.current.user.id)
+    const nextData = recalculateMetrics(normalizeStudyData(loaded))
+    dataRef.current = nextData
+    setData(nextData)
+    await upsertSupabaseStudyPatch(supabase, { metrics: nextData.metrics })
+  }, [])
+
+  useEffect(() => {
+    if (!supabase) {
+      return
+    }
+
+    let active = true
+
+    supabase.auth.getSession().then(({ data: authData, error }) => {
+      if (!active) return
+      if (error) setLastError(error.message)
+      setSession(authData.session)
+      setAuthReady(true)
+      if (authData.session && localStorage.getItem(modeKey) !== "demo") setWorkspaceMode("live")
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession)
+      if (nextSession && localStorage.getItem(modeKey) !== "demo") setWorkspaceMode("live")
+    })
+
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
+  }, [setWorkspaceMode])
+
+  useEffect(() => {
+    let active = true
+
+    queueMicrotask(() => {
+      if (!active) return
+
+      if (mode === "demo") {
+        const demoData = loadInitialStudyData()
+        dataRef.current = demoData
+        setData(demoData)
+        setIsLoading(false)
+        return
+      }
+
+      if (!authReady) return
+
+      if (!session?.user.id) {
+        const empty = emptyStudyData("")
+        dataRef.current = empty
+        setData(empty)
+        setIsLoading(false)
+        return
+      }
+
+      setIsLoading(true)
+      loadLiveData()
+        .catch((error) => {
+          if (active) setLastError(toErrorMessage(error))
+        })
+        .finally(() => {
+          if (active) setIsLoading(false)
+        })
+    })
+
+    return () => {
+      active = false
+    }
+  }, [authReady, loadLiveData, mode, session?.user.id])
+
+  useEffect(() => {
+    if (mode !== "demo") return
+    localStorage.setItem(storageKey, JSON.stringify(data))
+  }, [data, mode])
+
+  const activateDemoWorkspace = useCallback(() => {
+    setWorkspaceMode("demo")
+    const demoData = loadInitialStudyData()
+    dataRef.current = demoData
+    setData(demoData)
+    setIsLoading(false)
+  }, [setWorkspaceMode])
+
+  const activateLiveWorkspace = useCallback(() => {
+    if (!isSupabaseConfigured) return
+    setWorkspaceMode("live")
+  }, [setWorkspaceMode])
+
+  const signInWithPassword = useCallback(
+    async (email: string, password: string) =>
+      runOperation(async () => {
+        if (!supabase) throw new Error("Supabase is not configured")
+        const { data: authData, error } = await supabase.auth.signInWithPassword({ email, password })
+        if (error) throw new Error(error.message)
+        setSession(authData.session)
+        setWorkspaceMode("live")
+        return authData.session
+      }),
+    [runOperation, setWorkspaceMode],
+  )
+
+  const signUpWithPassword = useCallback(
+    async (email: string, password: string) =>
+      runOperation(async () => {
+        if (!supabase) throw new Error("Supabase is not configured")
+        const { data: authData, error } = await supabase.auth.signUp({ email, password })
+        if (error) throw new Error(error.message)
+        setSession(authData.session)
+        setWorkspaceMode("live")
+        return authData.session
+      }),
+    [runOperation, setWorkspaceMode],
+  )
+
+  const signOut = useCallback(
+    async () =>
+      runOperation(async () => {
+        if (!supabase) return
+        const { error } = await supabase.auth.signOut()
+        if (error) throw new Error(error.message)
+        setSession(null)
+        setWorkspaceMode("live")
+        const empty = emptyStudyData("")
+        dataRef.current = empty
+        setData(empty)
+      }),
+    [runOperation, setWorkspaceMode],
+  )
+
+  const reload = useCallback(
+    async () =>
+      runOperation(async () => {
+        if (modeRef.current === "demo") {
+          const demoData = loadInitialStudyData()
+          dataRef.current = demoData
+          setData(demoData)
+          return
+        }
+        await loadLiveData()
+      }),
+    [loadLiveData, runOperation],
+  )
+
+  const resetDemoData = useCallback(
+    async () =>
+      runOperation(async () => {
+        localStorage.setItem(seedVersionKey, demoSeedVersion)
+        localStorage.setItem(storageKey, JSON.stringify(defaultStudyData))
+        setWorkspaceMode("demo")
+        const demoData = normalizeStudyData(defaultStudyData)
+        dataRef.current = demoData
+        setData(demoData)
+      }),
+    [runOperation, setWorkspaceMode],
+  )
 
   const createCourse = useCallback(
-    (input: CreateCourseInput) => {
-      const timestamp = new Date().toISOString()
-      const course: Course = {
-        id: uid("course"),
-        ownerId: defaultStudyData.profileId,
-        title: input.title,
-        description: input.description,
-        mainLanguage: input.mainLanguage,
-        subject: input.subject,
-        difficultyLevel: input.difficultyLevel,
-        status: "draft",
-        examDate: input.examDate || undefined,
-        targetDate: input.targetDate || undefined,
-        sourceType: "mixed",
-        estimatedStudyMinutes: 0,
-        masteryScore: 0,
-        confidenceScore: 0,
-        tags: [],
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }
-      const nodes = createInitialNodes(course)
-      const tables = createDefaultAppendixTables(course.id)
+    async (input: CreateCourseInput) =>
+      commitMutation<Course>((current, idFactory) => {
+        const timestamp = new Date().toISOString()
+        const course: Course = {
+          id: idFactory("course"),
+          ownerId: modeRef.current === "live" ? sessionRef.current?.user.id ?? current.profileId : defaultStudyData.profileId,
+          title: input.title,
+          description: input.description,
+          mainLanguage: input.mainLanguage,
+          subject: input.subject,
+          difficultyLevel: input.difficultyLevel,
+          status: "draft",
+          examDate: input.examDate || undefined,
+          targetDate: input.targetDate || undefined,
+          sourceType: "mixed",
+          estimatedStudyMinutes: 0,
+          masteryScore: 0,
+          confidenceScore: 0,
+          tags: [],
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
+        const nodes = createInitialNodes(course, idFactory)
+        const tables = createDefaultAppendixTables(course.id, idFactory)
 
-      mutate((current) => ({
-        ...current,
-        courses: [course, ...current.courses],
-        courseNodes: [...current.courseNodes, ...nodes],
-        appendixTables: [...current.appendixTables, ...tables],
-      }))
-
-      return course
-    },
-    [mutate],
+        return {
+          result: course,
+          metricCourseIds: [course.id],
+          patch: { courses: [course], courseNodes: nodes, appendixTables: tables },
+          data: {
+            ...current,
+            profileId: course.ownerId,
+            courses: [course, ...current.courses],
+            courseNodes: [...current.courseNodes, ...nodes],
+            appendixTables: [...current.appendixTables, ...tables],
+          },
+        }
+      }),
+    [commitMutation],
   )
 
   const updateCourse = useCallback(
-    (courseId: string, patch: Partial<Course>) => {
-      mutate((current) => ({
-        ...current,
-        courses: current.courses.map((course) =>
+    async (courseId: string, patch: Partial<Course>) =>
+      commitMutation<void>((current) => {
+        const updated = current.courses.map((course) =>
           course.id === courseId ? { ...course, ...patch, updatedAt: new Date().toISOString() } : course,
-        ),
-      }))
-    },
-    [mutate],
+        )
+        const course = updated.find((item) => item.id === courseId)
+        return {
+          result: undefined,
+          metricCourseIds: [courseId],
+          patch: course ? { courses: [course] } : undefined,
+          data: { ...current, courses: updated },
+        }
+      }),
+    [commitMutation],
   )
 
   const addCourseNode = useCallback(
-    (courseId: string, parentId: string | undefined, nodeType: CourseNodeType, title: string) => {
-      const course = data.courses.find((item) => item.id === courseId)
-      if (!course) throw new Error("Course not found")
-      const siblings = data.courseNodes.filter((node) => node.courseId === courseId && node.parentId === parentId)
-      const parent = parentId ? data.courseNodes.find((node) => node.id === parentId) : undefined
-      const position = siblings.length + 1
-      const depth = parent ? parent.depth + 1 : 0
-      const numberingPath = makeNumberingPath(parent?.numberingPath ?? [], depth, position)
-      const timestamp = new Date().toISOString()
-      const node: CourseNode = {
-        id: uid("node"),
-        courseId,
-        parentId,
-        nodeType,
-        title,
-        position,
-        depth,
-        numberingPath,
-        displayNumber: displayNumber(numberingPath),
-        language: course.mainLanguage,
-        isCollapsedDefault: false,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }
+    async (courseId: string, parentId: string | undefined, nodeType: CourseNodeType, title: string) =>
+      commitMutation<CourseNode>((current, idFactory) => {
+        const course = current.courses.find((item) => item.id === courseId)
+        if (!course) throw new Error("Course not found")
+        const siblings = current.courseNodes.filter((node) => node.courseId === courseId && node.parentId === parentId)
+        const parent = parentId ? current.courseNodes.find((node) => node.id === parentId) : undefined
+        const position = siblings.length + 1
+        const depth = parent ? parent.depth + 1 : 0
+        const numberingPath = makeNumberingPath(parent?.numberingPath ?? [], depth, position)
+        const timestamp = new Date().toISOString()
+        const node: CourseNode = {
+          id: idFactory("node"),
+          courseId,
+          parentId,
+          nodeType,
+          title,
+          position,
+          depth,
+          numberingPath,
+          displayNumber: displayNumber(numberingPath),
+          language: course.mainLanguage,
+          isCollapsedDefault: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
 
-      mutate((current) => ({ ...current, courseNodes: [...current.courseNodes, node] }))
-      return node
-    },
-    [data.courseNodes, data.courses, mutate],
+        return {
+          result: node,
+          metricCourseIds: [courseId],
+          patch: { courseNodes: [node] },
+          data: { ...current, courseNodes: [...current.courseNodes, node] },
+        }
+      }),
+    [commitMutation],
   )
 
   const addContentBlock = useCallback(
-    (input: AddBlockInput) => {
-      const node = data.courseNodes.find((item) => item.id === input.nodeId)
-      const course = data.courses.find((item) => item.id === input.courseId)
-      if (!node || !course) throw new Error("Course node not found")
-      const siblings = data.contentBlocks.filter((block) => block.nodeId === input.nodeId)
-      const timestamp = new Date().toISOString()
-      const block: ContentBlock = {
-        id: uid("block"),
-        courseId: input.courseId,
-        nodeId: input.nodeId,
-        blockType: input.blockType,
-        position: siblings.length + 1,
-        depth: input.blockType === "heading" ? 1 : 2,
-        content: { text: input.text },
-        plainText: input.text,
-        language: course.mainLanguage,
-        numberingPath: node.numberingPath,
-        displayNumber: input.blockType === "heading" ? `${node.displayNumber}.${siblings.length + 1}` : "",
-        isCollapsible: input.blockType === "heading",
-        isCollapsed: false,
-        version: 1,
-        contentHash: getTextHash(input.text),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }
+    async (input: AddBlockInput) =>
+      commitMutation<ContentBlock>((current, idFactory) => {
+        const node = current.courseNodes.find((item) => item.id === input.nodeId)
+        const course = current.courses.find((item) => item.id === input.courseId)
+        if (!node || !course) throw new Error("Course node not found")
+        const siblings = current.contentBlocks.filter((block) => block.nodeId === input.nodeId)
+        const timestamp = new Date().toISOString()
+        const block: ContentBlock = {
+          id: idFactory("block"),
+          courseId: input.courseId,
+          nodeId: input.nodeId,
+          blockType: input.blockType,
+          position: siblings.length + 1,
+          depth: input.blockType === "heading" ? 1 : 2,
+          content: { text: input.text },
+          plainText: input.text,
+          language: course.mainLanguage,
+          numberingPath: node.numberingPath,
+          displayNumber: input.blockType === "heading" ? `${node.displayNumber}.${siblings.length + 1}` : "",
+          isCollapsible: input.blockType === "heading",
+          isCollapsed: false,
+          version: 1,
+          contentHash: getTextHash(input.text),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
 
-      mutate((current) => ({ ...current, contentBlocks: [...current.contentBlocks, block] }))
-      return block
-    },
-    [data.contentBlocks, data.courseNodes, data.courses, mutate],
+        return {
+          result: block,
+          metricCourseIds: [input.courseId],
+          patch: { contentBlocks: [block] },
+          data: { ...current, contentBlocks: [...current.contentBlocks, block] },
+        }
+      }),
+    [commitMutation],
   )
 
   const updateContentBlock = useCallback(
-    (blockId: string, text: string) => {
-      mutate((current) => {
+    async (blockId: string, text: string) =>
+      commitMutation<void>((current, idFactory) => {
         const block = current.contentBlocks.find((item) => item.id === blockId)
-        if (!block) return current
+        if (!block) return { result: undefined, data: current }
+        const timestamp = new Date().toISOString()
         const nextHash = getTextHash(text)
         const changed = nextHash !== block.contentHash
+        const nextBlock: ContentBlock = {
+          ...block,
+          content: { ...block.content, text },
+          plainText: text,
+          version: changed ? block.version + 1 : block.version,
+          contentHash: nextHash,
+          updatedAt: timestamp,
+        }
+        const versionRow: ContentBlockVersion | undefined = changed
+          ? {
+              id: idFactory("block_version"),
+              contentBlockId: blockId,
+              version: nextBlock.version,
+              content: nextBlock.content,
+              plainText: text,
+              contentHash: nextHash,
+              createdBy: current.profileId,
+              createdAt: timestamp,
+            }
+          : undefined
         const flashcardIds = new Set(
           current.flashcardSources
             .filter((source) => source.sourceTargetType === "content_block" && source.sourceTargetId === blockId)
             .map((source) => source.flashcardId),
         )
+        const nextAnchors = current.contentTextAnchors.map((anchor) =>
+          anchor.contentBlockId === blockId ? { ...anchor, anchorStatus: "needs_review" as const, updatedAt: timestamp } : anchor,
+        )
+        const nextFlashcards = current.flashcards.map((card) =>
+          changed && flashcardIds.has(card.id) ? { ...card, staleStatus: "needs_review" as const, updatedAt: timestamp } : card,
+        )
 
         return {
-          ...current,
-          contentBlocks: current.contentBlocks.map((item) =>
-            item.id === blockId
-              ? {
-                  ...item,
-                  content: { ...item.content, text },
-                  plainText: text,
-                  version: changed ? item.version + 1 : item.version,
-                  contentHash: nextHash,
-                  updatedAt: new Date().toISOString(),
-                }
-              : item,
-          ),
-          contentTextAnchors: current.contentTextAnchors.map((anchor) =>
-            anchor.contentBlockId === blockId ? { ...anchor, anchorStatus: "needs_review" } : anchor,
-          ),
-          flashcards: current.flashcards.map((card) =>
-            changed && flashcardIds.has(card.id)
-              ? { ...card, staleStatus: "needs_review", updatedAt: new Date().toISOString() }
-              : card,
-          ),
+          result: undefined,
+          metricCourseIds: [block.courseId],
+          patch: {
+            contentBlocks: [nextBlock],
+            contentBlockVersions: versionRow ? [versionRow] : [],
+            contentTextAnchors: nextAnchors.filter((anchor) => anchor.contentBlockId === blockId),
+            flashcards: nextFlashcards.filter((card) => changed && flashcardIds.has(card.id)),
+          },
+          data: {
+            ...current,
+            contentBlocks: current.contentBlocks.map((item) => (item.id === blockId ? nextBlock : item)),
+            contentBlockVersions: versionRow ? [...current.contentBlockVersions, versionRow] : current.contentBlockVersions,
+            contentTextAnchors: nextAnchors,
+            flashcards: nextFlashcards,
+          },
         }
-      })
-    },
-    [mutate],
+      }),
+    [commitMutation],
   )
 
   const toggleBlockCollapse = useCallback(
-    (blockId: string) => {
-      mutate((current) => ({
-        ...current,
-        contentBlocks: current.contentBlocks.map((block) =>
-          block.id === blockId ? { ...block, isCollapsed: !block.isCollapsed } : block,
-        ),
-      }))
-    },
-    [mutate],
+    async (blockId: string) =>
+      commitMutation<void>((current) => {
+        const block = current.contentBlocks.find((item) => item.id === blockId)
+        if (!block) return { result: undefined, data: current }
+        const nextBlock = { ...block, isCollapsed: !block.isCollapsed, updatedAt: new Date().toISOString() }
+        return {
+          result: undefined,
+          patch: { contentBlocks: [nextBlock] },
+          data: { ...current, contentBlocks: current.contentBlocks.map((item) => (item.id === blockId ? nextBlock : item)) },
+        }
+      }),
+    [commitMutation],
   )
 
   const importTextToNode = useCallback(
-    (courseId: string, nodeId: string, text: string) => {
-      const course = data.courses.find((item) => item.id === courseId)
-      const node = data.courseNodes.find((item) => item.id === nodeId)
-      if (!course || !node) return 0
-      const blocks = splitPastedText(text, course, node)
+    async (courseId: string, nodeId: string, text: string) =>
+      commitMutation<number>((current, idFactory) => {
+        const course = current.courses.find((item) => item.id === courseId)
+        const node = current.courseNodes.find((item) => item.id === nodeId)
+        if (!course || !node) return { result: 0, data: current }
+        const existingCount = current.contentBlocks.filter((item) => item.nodeId === nodeId).length
+        const blocks = splitPastedText(text, course, node, idFactory).map((block, index) => ({
+          ...block,
+          position: existingCount + index + 1,
+        }))
 
-      mutate((current) => ({
-        ...current,
-        contentBlocks: [
-          ...current.contentBlocks,
-          ...blocks.map((block, index) => ({
-            ...block,
-            position: current.contentBlocks.filter((item) => item.nodeId === nodeId).length + index + 1,
-          })),
-        ],
-      }))
-
-      return blocks.length
-    },
-    [data.courseNodes, data.courses, mutate],
+        return {
+          result: blocks.length,
+          metricCourseIds: [courseId],
+          patch: { contentBlocks: blocks },
+          data: { ...current, contentBlocks: [...current.contentBlocks, ...blocks] },
+        }
+      }),
+    [commitMutation],
   )
 
   const addAppendixTable = useCallback(
-    (courseId: string, name: string) => {
-      const siblings = data.appendixTables.filter((table) => table.courseId === courseId)
-      const timestamp = new Date().toISOString()
-      const table: AppendixTable = {
-        id: uid("table"),
-        courseId,
-        name,
-        slug: slugify(name),
-        tableType: "custom",
-        isDefault: false,
-        description: "Custom structured appendix table.",
-        position: siblings.length + 1,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }
+    async (courseId: string, name: string) =>
+      commitMutation<AppendixTable>((current, idFactory) => {
+        const siblings = current.appendixTables.filter((table) => table.courseId === courseId)
+        const timestamp = new Date().toISOString()
+        const table: AppendixTable = {
+          id: idFactory("table"),
+          courseId,
+          name,
+          slug: slugify(name),
+          tableType: "custom",
+          isDefault: false,
+          description: "Custom structured appendix table.",
+          position: siblings.length + 1,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
 
-      mutate((current) => ({ ...current, appendixTables: [...current.appendixTables, table] }))
-      return table
-    },
-    [data.appendixTables, mutate],
+        return {
+          result: table,
+          metricCourseIds: [courseId],
+          patch: { appendixTables: [table] },
+          data: { ...current, appendixTables: [...current.appendixTables, table] },
+        }
+      }),
+    [commitMutation],
   )
 
   const addAppendixRecord = useCallback(
-    (input: AddAppendixRecordInput) => {
-      const timestamp = new Date().toISOString()
-      const record: AppendixRecord = {
-        id: uid("record"),
-        courseId: input.courseId,
-        appendixTableId: input.appendixTableId,
-        title: input.title,
-        recordType: data.appendixTables.find((table) => table.id === input.appendixTableId)?.tableType ?? "custom",
-        shortDescription: input.shortDescription,
-        language: input.language,
-        aliases: [],
-        translations: {},
-        tags: input.tags,
-        userNotes: "",
-        version: 1,
-        recordHash: getTextHash(`${input.title}:${input.shortDescription}`),
-        createdMethod: "manual",
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }
+    async (input: AddAppendixRecordInput) =>
+      commitMutation<AppendixRecord>((current, idFactory) => {
+        const timestamp = new Date().toISOString()
+        const record: AppendixRecord = {
+          id: idFactory("record"),
+          courseId: input.courseId,
+          appendixTableId: input.appendixTableId,
+          title: input.title,
+          recordType: current.appendixTables.find((table) => table.id === input.appendixTableId)?.tableType ?? "custom",
+          shortDescription: input.shortDescription,
+          language: input.language,
+          aliases: [],
+          translations: {},
+          tags: input.tags,
+          userNotes: "",
+          version: 1,
+          recordHash: getTextHash(`${input.title}:${input.shortDescription}`),
+          createdMethod: "manual",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
 
-      mutate((current) => ({ ...current, appendixRecords: [...current.appendixRecords, record] }))
-      return record
-    },
-    [data.appendixTables, mutate],
+        return {
+          result: record,
+          metricCourseIds: [input.courseId],
+          patch: { appendixRecords: [record] },
+          data: { ...current, appendixRecords: [...current.appendixRecords, record] },
+        }
+      }),
+    [commitMutation],
   )
 
   const linkContentToAppendix = useCallback(
-    (courseId: string, blockId: string, recordId: string) => {
-      const link: EntityLink = {
-        id: uid("link"),
-        courseId,
-        fromType: "content_block",
-        fromId: blockId,
-        toType: "appendix_record",
-        toId: recordId,
-        linkType: "references",
-        createdMethod: "manual",
-        createdAt: new Date().toISOString(),
-      }
+    async (courseId: string, blockId: string, recordId: string) =>
+      commitMutation<EntityLink>((current, idFactory) => {
+        const link: EntityLink = {
+          id: idFactory("link"),
+          courseId,
+          fromType: "content_block",
+          fromId: blockId,
+          toType: "appendix_record",
+          toId: recordId,
+          linkType: "references",
+          createdMethod: "manual",
+          createdAt: new Date().toISOString(),
+        }
 
-      mutate((current) => ({ ...current, entityLinks: [...current.entityLinks, link] }))
-      return link
-    },
-    [mutate],
+        return {
+          result: link,
+          metricCourseIds: [courseId],
+          patch: { entityLinks: [link] },
+          data: { ...current, entityLinks: [...current.entityLinks, link] },
+        }
+      }),
+    [commitMutation],
   )
 
   const addFlashcard = useCallback(
-    (input: AddFlashcardInput) => {
-      const timestamp = new Date().toISOString()
-      const sourceWarning = !input.sourceTargetId
-      const card: Flashcard = {
-        id: uid("card"),
-        courseId: input.courseId,
-        cardType: input.cardType,
-        prompt: { text: input.prompt },
-        answer: { text: input.answer },
-        explanation: "",
-        hint: "",
-        sourceExcerpt: input.sourceExcerpt ?? "",
-        difficultyLevel: "intermediate",
-        tags: input.tags,
-        language: input.language,
-        relatedAppendixRecordId: input.relatedAppendixRecordId,
-        sourceWarning,
-        masteryScore: 0,
-        confidenceScore: 0,
-        dueAt: timestamp,
-        intervalDays: 0,
-        easeFactor: 2.5,
-        stability: 0,
-        difficulty: 0.5,
-        lapses: 0,
-        reviewCount: 0,
-        staleStatus: "fresh",
-        createdMethod: "manual",
-        userNotes: "",
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }
+    async (input: AddFlashcardInput) =>
+      commitMutation<Flashcard>((current, idFactory) => {
+        const timestamp = new Date().toISOString()
+        const sourceWarning = !input.sourceTargetId
+        const card: Flashcard = {
+          id: idFactory("card"),
+          courseId: input.courseId,
+          cardType: input.cardType,
+          prompt: { text: input.prompt },
+          answer: { text: input.answer },
+          explanation: "",
+          hint: "",
+          sourceExcerpt: input.sourceExcerpt ?? "",
+          difficultyLevel: "intermediate",
+          tags: input.tags,
+          language: input.language,
+          relatedAppendixRecordId: input.relatedAppendixRecordId,
+          sourceWarning,
+          masteryScore: 0,
+          confidenceScore: 0,
+          dueAt: timestamp,
+          intervalDays: 0,
+          easeFactor: 2.5,
+          stability: 0,
+          difficulty: 0.5,
+          lapses: 0,
+          reviewCount: 0,
+          staleStatus: "fresh",
+          createdMethod: "manual",
+          userNotes: "",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
+        const source =
+          input.sourceTargetId && input.sourceTargetType
+            ? {
+                id: idFactory("card_source"),
+                flashcardId: card.id,
+                sourceTargetType: input.sourceTargetType,
+                sourceTargetId: input.sourceTargetId,
+                sourceExcerpt: input.sourceExcerpt ?? "",
+                createdAt: timestamp,
+              }
+            : undefined
 
-      const source =
-        input.sourceTargetId && input.sourceTargetType
-          ? {
-              id: uid("card_source"),
-              flashcardId: card.id,
-              sourceTargetType: input.sourceTargetType,
-              sourceTargetId: input.sourceTargetId,
-              sourceExcerpt: input.sourceExcerpt ?? "",
-              createdAt: timestamp,
-            }
-          : undefined
-
-      mutate((current) => ({
-        ...current,
-        flashcards: [...current.flashcards, card],
-        flashcardSources: source ? [...current.flashcardSources, source] : current.flashcardSources,
-      }))
-
-      return card
-    },
-    [mutate],
+        return {
+          result: card,
+          metricCourseIds: [input.courseId],
+          patch: { flashcards: [card], flashcardSources: source ? [source] : [] },
+          data: {
+            ...current,
+            flashcards: [...current.flashcards, card],
+            flashcardSources: source ? [...current.flashcardSources, source] : current.flashcardSources,
+          },
+        }
+      }),
+    [commitMutation],
   )
 
   const reviewFlashcard = useCallback(
-    (courseId: string, cardId: string, rating: ReviewRating, answerText: string) => {
-      mutate((current) => {
+    async (courseId: string, cardId: string, rating: ReviewRating, answerText: string) =>
+      commitMutation<void>((current, idFactory) => {
         const card = current.flashcards.find((item) => item.id === cardId)
-        if (!card) return current
+        if (!card) return { result: undefined, data: current }
         const session: ReviewSession = {
-          id: uid("session"),
+          id: idFactory("session"),
           courseId,
           userId: current.profileId,
           mode: "single-card",
@@ -609,7 +1050,7 @@ export function StudyDataProvider({ children }: { children: ReactNode }) {
           cardCount: 1,
         }
         const attempt: ReviewAttempt = {
-          id: uid("attempt"),
+          id: idFactory("attempt"),
           reviewSessionId: session.id,
           flashcardId: cardId,
           userId: current.profileId,
@@ -623,76 +1064,84 @@ export function StudyDataProvider({ children }: { children: ReactNode }) {
         const nextCard = scheduleReview(card, rating)
 
         return {
-          ...current,
-          reviewSessions: [...current.reviewSessions, session],
-          reviewAttempts: [...current.reviewAttempts, attempt],
-          flashcards: current.flashcards.map((item) => (item.id === cardId ? nextCard : item)),
+          result: undefined,
+          metricCourseIds: [courseId],
+          patch: { reviewSessions: [session], reviewAttempts: [attempt], flashcards: [nextCard] },
+          data: {
+            ...current,
+            reviewSessions: [...current.reviewSessions, session],
+            reviewAttempts: [...current.reviewAttempts, attempt],
+            flashcards: current.flashcards.map((item) => (item.id === cardId ? nextCard : item)),
+          },
         }
-      })
-    },
-    [mutate],
+      }),
+    [commitMutation],
   )
 
   const createAiFlashcardSuggestion = useCallback(
-    (courseId: string, targetId: string, targetType: "content_block" | "appendix_record") => {
-      const targetText =
-        targetType === "content_block"
-          ? data.contentBlocks.find((block) => block.id === targetId)?.plainText
-          : data.appendixRecords.find((record) => record.id === targetId)?.shortDescription
-      const title =
-        targetType === "content_block"
-          ? "Flashcards from selected content"
-          : "Flashcards from selected appendix item"
-      const timestamp = new Date().toISOString()
-      const suggestion: AiSuggestion = {
-        id: uid("suggestion"),
-        courseId,
-        suggestionType: "flashcards",
-        status: "pending",
-        title,
-        summary: `Suggested cards from: ${targetText?.slice(0, 110) ?? "selected source"}`,
-        payload: {
-          cards: [
-            {
-              cardType: "basic",
-              prompt: `Explain: ${(targetText ?? "this source").slice(0, 70)}`,
-              answer: targetText ?? "Review the source and write a concise answer.",
-              sourceTargetType: targetType,
-              sourceTargetId: targetId,
-            },
-          ],
-        },
-        model: "supabase-edge-function-ready",
-        promptVersion: "mvp-1",
-        riskLevel: "low",
-        createdByContext: { targetType, targetId },
-        createdAt: timestamp,
-      }
+    async (courseId: string, targetId: string, targetType: "content_block" | "appendix_record") =>
+      commitMutation<AiSuggestion>((current, idFactory) => {
+        const targetBlock = targetType === "content_block" ? current.contentBlocks.find((block) => block.id === targetId) : undefined
+        const targetRecord = targetType === "appendix_record" ? current.appendixRecords.find((record) => record.id === targetId) : undefined
+        const targetText = targetBlock?.plainText ?? targetRecord?.shortDescription
+        const title = targetType === "content_block" ? "Flashcards from selected content" : "Flashcards from selected appendix item"
+        const timestamp = new Date().toISOString()
+        const suggestion: AiSuggestion = {
+          id: idFactory("suggestion"),
+          courseId,
+          suggestionType: "flashcards",
+          status: "pending",
+          title,
+          summary: `Suggested cards from: ${targetText?.slice(0, 110) ?? "selected source"}`,
+          payload: {
+            cards: [
+              {
+                cardType: "basic",
+                prompt: `Explain: ${(targetText ?? "this source").slice(0, 70)}`,
+                answer: targetText ?? "Review the source and write a concise answer.",
+                sourceTargetType: targetType,
+                sourceTargetId: targetId,
+              },
+            ],
+          },
+          model: "supabase-edge-function-ready",
+          promptVersion: "mvp-1",
+          riskLevel: "low",
+          createdByContext: { targetType, targetId },
+          createdAt: timestamp,
+        }
+        const target: AiSuggestionTarget = {
+          id: idFactory("suggestion_target"),
+          aiSuggestionId: suggestion.id,
+          targetType,
+          targetId,
+          targetVersion: targetBlock?.version ?? targetRecord?.version,
+          targetHash: targetBlock?.contentHash ?? targetRecord?.recordHash,
+        }
 
-      mutate((current) => ({ ...current, aiSuggestions: [suggestion, ...current.aiSuggestions] }))
-      return suggestion
-    },
-    [data.appendixRecords, data.contentBlocks, mutate],
+        return {
+          result: suggestion,
+          metricCourseIds: [courseId],
+          patch: { aiSuggestions: [suggestion], aiSuggestionTargets: [target] },
+          data: {
+            ...current,
+            aiSuggestions: [suggestion, ...current.aiSuggestions],
+            aiSuggestionTargets: [...current.aiSuggestionTargets, target],
+          },
+        }
+      }),
+    [commitMutation],
   )
 
   const resolveSuggestion = useCallback(
-    (suggestionId: string, status: AiSuggestion["status"]) => {
-      mutate((current) => {
+    async (suggestionId: string, status: AiSuggestion["status"]) =>
+      commitMutation<void>((current, idFactory) => {
         const suggestion = current.aiSuggestions.find((item) => item.id === suggestionId)
-        if (!suggestion) return current
-        const acceptedCards =
-          status === "accepted" && suggestion.suggestionType === "flashcards"
-            ? ((suggestion.payload.cards as Array<{
-                cardType?: Flashcard["cardType"]
-                prompt?: string
-                answer?: string
-                sourceTargetType?: FlashcardSource["sourceTargetType"]
-                sourceTargetId?: string
-              }>) ?? [])
-            : []
+        if (!suggestion) return { result: undefined, data: current }
+        const acceptedCards = status === "accepted" && suggestion.suggestionType === "flashcards" ? getSuggestionCardPayloads(suggestion) : []
         const timestamp = new Date().toISOString()
         const cards: Flashcard[] = acceptedCards.map((item) => ({
-          id: uid("card"),
+          id: idFactory("card"),
           courseId: suggestion.courseId,
           cardType: item.cardType ?? "basic",
           prompt: { text: item.prompt ?? "Review this source" },
@@ -702,7 +1151,7 @@ export function StudyDataProvider({ children }: { children: ReactNode }) {
           sourceExcerpt: item.answer?.slice(0, 180) ?? "",
           difficultyLevel: "intermediate",
           tags: ["ai-suggested"],
-          language: data.courses.find((course) => course.id === suggestion.courseId)?.mainLanguage ?? "en",
+          language: current.courses.find((course) => course.id === suggestion.courseId)?.mainLanguage ?? "en",
           sourceWarning: !item.sourceTargetId,
           masteryScore: 0,
           confidenceScore: 0,
@@ -724,7 +1173,7 @@ export function StudyDataProvider({ children }: { children: ReactNode }) {
           if (!source.sourceTargetId || !source.sourceTargetType) return []
           return [
             {
-              id: uid("card_source"),
+              id: idFactory("card_source"),
               flashcardId: card.id,
               sourceTargetType: source.sourceTargetType,
               sourceTargetId: source.sourceTargetId,
@@ -733,23 +1182,40 @@ export function StudyDataProvider({ children }: { children: ReactNode }) {
             },
           ]
         })
+        const resolvedSuggestion: AiSuggestion = { ...suggestion, status, resolvedAt: timestamp }
 
         return {
-          ...current,
-          aiSuggestions: current.aiSuggestions.map((item) =>
-            item.id === suggestionId ? { ...item, status, resolvedAt: timestamp } : item,
-          ),
-          flashcards: [...current.flashcards, ...cards],
-          flashcardSources: [...current.flashcardSources, ...sources],
+          result: undefined,
+          metricCourseIds: [suggestion.courseId],
+          patch: { aiSuggestions: [resolvedSuggestion], flashcards: cards, flashcardSources: sources },
+          data: {
+            ...current,
+            aiSuggestions: current.aiSuggestions.map((item) => (item.id === suggestionId ? resolvedSuggestion : item)),
+            flashcards: [...current.flashcards, ...cards],
+            flashcardSources: [...current.flashcardSources, ...sources],
+          },
         }
-      })
-    },
-    [data.courses, mutate],
+      }),
+    [commitMutation],
   )
 
   const value = useMemo<StudyDataContextValue>(
     () => ({
       data,
+      mode,
+      isLiveMode: mode === "live",
+      isLoading,
+      authReady,
+      pendingMutations,
+      lastError,
+      user: session?.user ?? null,
+      session,
+      activateDemoWorkspace,
+      activateLiveWorkspace,
+      signInWithPassword,
+      signUpWithPassword,
+      signOut,
+      reload,
       resetDemoData,
       createCourse,
       updateCourse,
@@ -772,17 +1238,29 @@ export function StudyDataProvider({ children }: { children: ReactNode }) {
       addContentBlock,
       addCourseNode,
       addFlashcard,
+      authReady,
       createAiFlashcardSuggestion,
       createCourse,
       data,
       importTextToNode,
+      isLoading,
+      lastError,
       linkContentToAppendix,
+      mode,
+      pendingMutations,
+      reload,
       resetDemoData,
       resolveSuggestion,
       reviewFlashcard,
+      session,
+      signInWithPassword,
+      signOut,
+      signUpWithPassword,
       toggleBlockCollapse,
       updateContentBlock,
       updateCourse,
+      activateDemoWorkspace,
+      activateLiveWorkspace,
     ],
   )
 

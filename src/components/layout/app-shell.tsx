@@ -6,6 +6,7 @@ import {
   Home,
   LibraryBig,
   LogIn,
+  LogOut,
   PanelLeftClose,
   Search,
   Sparkles,
@@ -15,7 +16,6 @@ import { NavLink, Outlet, useLocation } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
-import { isSupabaseConfigured } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
 import { useStudyData } from "@/state/study-data"
 
@@ -28,7 +28,7 @@ const navItems = [
 
 export function AppShell() {
   const [open, setOpen] = useState(false)
-  const { data } = useStudyData()
+  const { data, mode, pendingMutations, signOut, user, lastError } = useStudyData()
   const location = useLocation()
   const activeCourse = useMemo(() => {
     const match = location.pathname.match(/\/courses\/([^/]+)/)
@@ -92,9 +92,10 @@ export function AppShell() {
                 {data.flashcards.length}
               </div>
             </div>
-            <Badge variant={isSupabaseConfigured ? "success" : "warning"} className="w-full justify-center">
-              {isSupabaseConfigured ? "Supabase connected" : "Demo persistence"}
+            <Badge variant={mode === "live" ? "success" : "warning"} className="w-full justify-center">
+              {mode === "live" ? "Live Supabase" : "Demo persistence"}
             </Badge>
+            {lastError && <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{lastError}</div>}
           </div>
         </div>
       </aside>
@@ -115,10 +116,17 @@ export function AppShell() {
             </div>
           </div>
           <div className="hidden items-center gap-2 sm:flex">
+            {pendingMutations > 0 && <Badge variant="outline">Saving...</Badge>}
             <Badge variant="secondary">
               <Sparkles className="mr-1 size-3" />
               Suggestion-safe AI
             </Badge>
+            {mode === "live" && user && (
+              <Button variant="outline" size="sm" onClick={() => void signOut()}>
+                <LogOut />
+                Sign out
+              </Button>
+            )}
           </div>
         </header>
         <main className="min-h-[calc(100vh-4rem)]">

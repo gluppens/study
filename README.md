@@ -2,7 +2,7 @@
 
 Study is a source-linked learning workspace for building courses, writing structured course material, maintaining appendices, creating traceable flashcards, reviewing with spaced repetition, and tracking progress.
 
-The app is currently an MVP frontend with rich local demo data, a complete Supabase schema scaffold, and a safe AI suggestion function scaffold. It is designed so the local demo repository can later be replaced by Supabase-backed repositories without rewriting the product surface.
+The app is currently an MVP frontend with rich local demo data, Supabase-backed live mode, a complete Supabase schema scaffold, and a safe AI suggestion function scaffold. It can run as a separate local demo workspace or as an authenticated Supabase workspace when Vite Supabase environment variables are configured.
 
 For the original long-form product and architecture plan, see [docs/initial-product-plan.md](docs/initial-product-plan.md).
 
@@ -66,14 +66,16 @@ Implemented:
   - JSON course export
   - flashcards CSV export
 - Global search across local demo content, appendices, cards, and tags.
+- Email/password Supabase Auth live mode.
+- Dual local/Supabase repository layer behind the shared `StudyDataProvider`.
+- Supabase-backed live CRUD for courses, hierarchy, content blocks, appendices, flashcards, reviews, AI suggestions, links, tags, assets, and metrics.
 - Supabase migration with tables, indexes, RLS policies, and storage buckets.
 - Supabase Edge Function scaffold for AI suggestions.
 
 Not yet implemented:
 
-- Full Supabase data repositories for live CRUD.
-- Production authentication flow beyond the UI scaffold.
 - Real file upload/download UI.
+- Production auth hardening such as password reset, OAuth providers, and account settings.
 - PDF/Word import and export.
 - Advanced exact text-span repair.
 - Full AI import pipeline.
@@ -171,6 +173,7 @@ Storage keys:
 ```text
 study.mvp.data
 study.mvp.seedVersion
+study.mvp.mode
 ```
 
 Current seed version:
@@ -187,19 +190,20 @@ Frontend:
 - TypeScript
 - Vite
 - React Router
-- TanStack Query dependency installed for future Supabase repository integration
+- TanStack Query dependency installed for future server-state refinements
 - Tailwind CSS
 - shadcn/ui-style primitives built locally
 - lucide-react icons
 
 State:
 
-- `StudyDataProvider` currently owns local demo data.
-- Runtime actions mutate local state and persist it to `localStorage`.
-- The state shape mirrors the intended Supabase schema.
-- This keeps the UI usable now and makes future Supabase repositories easier to introduce.
+- `StudyDataProvider` is the shared data boundary for demo and live workspaces.
+- Demo mode persists runtime actions to `localStorage`.
+- Live mode uses Supabase Auth plus a repository/mapping layer to persist the same domain shape to Supabase tables.
+- Mutating actions are async and keep the UI state optimistic while serializing Supabase writes.
+- The state shape mirrors the Supabase schema so pages can stay backend-agnostic.
 
-Backend scaffold:
+Backend and live persistence:
 
 - Supabase Auth
 - Supabase Postgres
@@ -230,6 +234,8 @@ Domain and state:
 - `src/domain/import-export.ts`
 - `src/state/demo-data.ts`
 - `src/state/study-data.tsx`
+- `src/state/supabase-study-repository.ts`
+- `src/lib/supabase-storage.ts`
 
 Layout and UI:
 
@@ -360,14 +366,17 @@ Add Supabase values when using a hosted Supabase project:
 
 ```bash
 VITE_SUPABASE_URL=
+VITE_SUPABASE_PUBLISHABLE_KEY=
 VITE_SUPABASE_ANON_KEY=
 ```
+
+`VITE_SUPABASE_PUBLISHABLE_KEY` is preferred for hosted projects. `VITE_SUPABASE_ANON_KEY` remains supported for older Supabase setups and local projects.
 
 Without these values, the app runs in local demo mode.
 
 ## Supabase Local Development
 
-The Supabase project scaffold is present, but live repository integration is not yet wired into the frontend.
+The Supabase project scaffold is present, and the frontend can use live Supabase persistence when Vite Supabase env vars are configured.
 
 Typical local Supabase workflow:
 
@@ -450,9 +459,10 @@ The intended AI behavior is conservative:
 
 Current implementation:
 
-- local UI can create demo flashcard suggestions
+- local and live UI can create reviewable flashcard suggestions
 - suggestions appear in the flashcard validation inbox
 - accepting flashcard suggestions creates derived cards
+- live mode persists suggestions, targets, accepted cards, and source links through Supabase repositories
 - Supabase Edge Function scaffold can create persisted suggestions server-side
 
 ## MVP Boundaries
@@ -461,7 +471,8 @@ This MVP is meant to demonstrate the product shape, not finish every hard system
 
 Simplified for now:
 
-- local demo persistence instead of full Supabase repositories
+- local demo mode remains separate from authenticated Supabase live data
+- live mode is browser-client Supabase persistence, not an SSR application
 - block-level linking as the primary working link model
 - exact text anchors exist in data but advanced repair UI is not complete
 - text-like minimap rail rather than exact glyph-level VS Code minimap
@@ -473,8 +484,7 @@ Simplified for now:
 
 Phase 2:
 
-- replace local demo repository with Supabase-backed repositories
-- complete auth-backed profile/course lifecycle
+- harden the Supabase live workspace with password reset, account/profile settings, and better error recovery
 - add real file uploads to Supabase Storage
 - improve exact text-span anchoring and stale anchor repair
 - add richer appendix custom fields and views
@@ -503,5 +513,5 @@ Phase 3:
 - Treat flashcards as derived and traceable.
 - Preserve source links when generating or editing cards.
 - Keep AI outputs reviewable.
-- Avoid client-side-only security assumptions when moving to Supabase-backed data.
-- Prefer adding repository adapters over rewriting page components when replacing local demo state.
+- Keep RLS policies authoritative; do not rely on client-side checks for data isolation.
+- Keep local and Supabase repository behavior aligned so page components stay backend-agnostic.

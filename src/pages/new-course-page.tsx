@@ -12,7 +12,7 @@ import { useStudyData } from "@/state/study-data"
 
 export function NewCoursePage() {
   const navigate = useNavigate()
-  const { createCourse } = useStudyData()
+  const { createCourse, pendingMutations } = useStudyData()
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [subject, setSubject] = useState("")
@@ -21,9 +21,9 @@ export function NewCoursePage() {
   const [examDate, setExamDate] = useState("")
   const [targetDate, setTargetDate] = useState("")
 
-  function onSubmit(event: FormEvent) {
+  async function onSubmit(event: FormEvent) {
     event.preventDefault()
-    const course = createCourse({
+    const course = await createCourse({
       title: title.trim() || "Untitled course",
       description: description.trim(),
       subject: subject.trim() || "General",
@@ -102,9 +102,9 @@ export function NewCoursePage() {
                 <Input id="examDate" type="date" value={examDate} onChange={(event) => setExamDate(event.target.value)} />
               </div>
             </div>
-            <Button type="submit">
+            <Button type="submit" disabled={pendingMutations > 0}>
               <BookPlus />
-              Create course
+              {pendingMutations > 0 ? "Creating..." : "Create course"}
             </Button>
           </form>
         </CardContent>

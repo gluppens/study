@@ -15,7 +15,7 @@ import { useStudyData } from "@/state/study-data"
 
 export function AppendicesPage() {
   const { courseId = "" } = useParams()
-  const { data, addAppendixTable, addAppendixRecord, createAiFlashcardSuggestion } = useStudyData()
+  const { data, addAppendixTable, addAppendixRecord, createAiFlashcardSuggestion, pendingMutations } = useStudyData()
   const course = data.courses.find((item) => item.id === courseId)
   const tables = data.appendixTables.filter((table) => table.courseId === courseId).sort((a, b) => a.position - b.position)
   const [selectedTableId, setSelectedTableId] = useState(tables[0]?.id ?? "")
@@ -29,10 +29,10 @@ export function AppendicesPage() {
   const sources = data.sources.filter((source) => source.courseId === courseId)
   const links = useMemo(() => data.entityLinks.filter((link) => link.courseId === courseId), [courseId, data.entityLinks])
 
-  function submitRecord(event: FormEvent) {
+  async function submitRecord(event: FormEvent) {
     event.preventDefault()
     if (!selectedTable || !title.trim()) return
-    addAppendixRecord({
+    await addAppendixRecord({
       courseId,
       appendixTableId: selectedTable.id,
       title: title.trim(),
@@ -69,19 +69,19 @@ export function AppendicesPage() {
           </div>
           <form
             className="mt-5 space-y-2 border-t pt-4"
-            onSubmit={(event) => {
+            onSubmit={async (event) => {
               event.preventDefault()
               if (!newTableName.trim()) return
-              const table = addAppendixTable(courseId, newTableName.trim())
+              const table = await addAppendixTable(courseId, newTableName.trim())
               setSelectedTableId(table.id)
               setNewTableName("")
             }}
           >
             <Label htmlFor="newTable">Custom table</Label>
             <Input id="newTable" value={newTableName} onChange={(event) => setNewTableName(event.target.value)} placeholder="e.g. Formulas" />
-            <Button type="submit" size="sm" className="w-full">
+            <Button type="submit" size="sm" className="w-full" disabled={pendingMutations > 0}>
               <TableProperties />
-              Add table
+              {pendingMutations > 0 ? "Saving..." : "Add table"}
             </Button>
           </form>
         </aside>
@@ -133,9 +133,9 @@ export function AppendicesPage() {
                       <Input id="tags" value={tags} onChange={(event) => setTags(event.target.value)} placeholder="comma, separated" />
                     </div>
                     <div className="flex items-end">
-                      <Button type="submit">
+                      <Button type="submit" disabled={pendingMutations > 0}>
                         <Plus />
-                        Add record
+                        {pendingMutations > 0 ? "Saving..." : "Add record"}
                       </Button>
                     </div>
                   </form>
@@ -184,7 +184,7 @@ export function AppendicesPage() {
                         <Button
                           variant="secondary"
                           size="sm"
-                          onClick={() => createAiFlashcardSuggestion(courseId, record.id, "appendix_record")}
+                          onClick={() => void createAiFlashcardSuggestion(courseId, record.id, "appendix_record")}
                         >
                           <Sparkles />
                           Suggest cards

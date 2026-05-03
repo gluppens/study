@@ -137,6 +137,7 @@ export function ContentPage() {
     toggleBlockCollapse,
     linkContentToAppendix,
     createAiFlashcardSuggestion,
+    pendingMutations,
   } = useStudyData()
 
   const nodes = useMemo(
@@ -313,7 +314,7 @@ export function ContentPage() {
     setDraftText("")
   }
 
-  function submitInlineDraft(event: FormEvent) {
+  async function submitInlineDraft(event: FormEvent) {
     event.preventDefault()
     if (!inlineDraft || !draftText.trim()) return
 
@@ -321,12 +322,12 @@ export function ContentPage() {
     if (!node) return
 
     if (inlineDraft.mode === "heading") {
-      const child = addCourseNode(courseId, node.id, childType[node.nodeType], draftText.trim())
+      const child = await addCourseNode(courseId, node.id, childType[node.nodeType], draftText.trim())
       setSelectedNodeId(child.id)
       setSelectedBlockId(undefined)
       window.setTimeout(() => scrollToItem(child.id), 0)
     } else {
-      const block = addContentBlock({
+      const block = await addContentBlock({
         courseId,
         nodeId: node.id,
         blockType: draftBlockType,
@@ -341,11 +342,11 @@ export function ContentPage() {
     setInlineDraft(null)
   }
 
-  function createFirstModule(event: FormEvent) {
+  async function createFirstModule(event: FormEvent) {
     event.preventDefault()
     if (!draftText.trim()) return
 
-    const node = addCourseNode(courseId, undefined, "module", draftText.trim())
+    const node = await addCourseNode(courseId, undefined, "module", draftText.trim())
     setDraftText("")
     setInlineDraft(null)
     setSelectedNodeId(node.id)
@@ -413,7 +414,7 @@ export function ContentPage() {
             size="sm"
             disabled={!linkRecordId}
             onClick={() => {
-              linkContentToAppendix(courseId, block.id, linkRecordId)
+              void linkContentToAppendix(courseId, block.id, linkRecordId)
               setLinkRecordId("")
             }}
           >
@@ -424,7 +425,7 @@ export function ContentPage() {
             type="button"
             variant="secondary"
             size="sm"
-            onClick={() => createAiFlashcardSuggestion(courseId, block.id, "content_block")}
+            onClick={() => void createAiFlashcardSuggestion(courseId, block.id, "content_block")}
           >
             <Sparkles />
             Suggest
@@ -550,7 +551,7 @@ export function ContentPage() {
                       size="sm"
                       onClick={(event) => {
                         event.stopPropagation()
-                        toggleBlockCollapse(block.id)
+                        void toggleBlockCollapse(block.id)
                       }}
                     >
                       {block.isCollapsed ? <ChevronRight /> : <ChevronDown />}
@@ -565,7 +566,7 @@ export function ContentPage() {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => createAiFlashcardSuggestion(courseId, block.id, "content_block")}
+                    onClick={() => void createAiFlashcardSuggestion(courseId, block.id, "content_block")}
                   >
                     <Sparkles />
                     Cards
@@ -578,7 +579,7 @@ export function ContentPage() {
                   className="block w-full rounded-sm bg-muted/40 px-3 py-2 text-left font-mono text-sm leading-6 text-muted-foreground line-clamp-2"
                   onClick={(event) => {
                     event.stopPropagation()
-                    toggleBlockCollapse(block.id)
+                    void toggleBlockCollapse(block.id)
                   }}
                 >
                   {block.plainText}
@@ -586,7 +587,7 @@ export function ContentPage() {
               ) : (
                 <Textarea
                   value={block.plainText}
-                  onChange={(event) => updateContentBlock(block.id, event.target.value)}
+                  onChange={(event) => void updateContentBlock(block.id, event.target.value)}
                   className="min-h-24 resize-y rounded-sm border-transparent bg-transparent px-0 font-mono text-sm leading-6 shadow-none focus-visible:border-input focus-visible:bg-background focus-visible:px-3"
                 />
               )}
@@ -670,6 +671,7 @@ export function ContentPage() {
               {selectedNode ? `${selectedNode.displayNumber} ${selectedNode.title}` : "No heading selected"}
             </span>
           </div>
+          {pendingMutations > 0 && <Badge variant="outline">Saving...</Badge>}
         </div>
 
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_5.5rem]">

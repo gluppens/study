@@ -62,11 +62,11 @@ export function CourseExplorer({ courseId, selectedNodeId, onSelectNode }: Cours
       <div className="min-h-0 flex-1 overflow-auto p-2">{nodes.filter((node) => !node.parentId).map(renderNode)}</div>
       <form
         className="space-y-2 border-t p-3"
-        onSubmit={(event) => {
+        onSubmit={async (event) => {
           event.preventDefault()
           if (!newTitle.trim()) return
           const type = selected ? childType[selected.nodeType] : "module"
-          const node = addCourseNode(courseId, selected?.id, type, newTitle.trim())
+          const node = await addCourseNode(courseId, selected?.id, type, newTitle.trim())
           setNewTitle("")
           onSelectNode(node.id)
         }}

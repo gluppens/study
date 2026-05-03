@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom"
+import type { ReactNode } from "react"
 import { AppShell } from "@/components/layout/app-shell"
 import { AnalyticsPage } from "@/pages/analytics-page"
 import { AppendicesPage } from "@/pages/appendices-page"
@@ -14,12 +15,35 @@ import { NewCoursePage } from "@/pages/new-course-page"
 import { SearchPage } from "@/pages/search-page"
 import { StudyPage } from "@/pages/study-page"
 import { StudySessionPage } from "@/pages/study-session-page"
+import { useStudyData } from "@/state/study-data"
+
+function RequireWorkspace({ children }: { children: ReactNode }) {
+  const { authReady, isLoading, mode, session } = useStudyData()
+
+  if (mode === "live" && authReady && !session) return <Navigate to="/login" replace />
+
+  if (mode === "live" && (!authReady || isLoading)) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background p-4">
+        <div className="rounded-md border bg-card px-4 py-3 text-sm text-muted-foreground">Loading live workspace...</div>
+      </div>
+    )
+  }
+
+  return children
+}
 
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route element={<AppShell />}>
+      <Route
+        element={
+          <RequireWorkspace>
+            <AppShell />
+          </RequireWorkspace>
+        }
+      >
         <Route index element={<DashboardPage />} />
         <Route path="courses" element={<CoursesPage />} />
         <Route path="courses/new" element={<NewCoursePage />} />

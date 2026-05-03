@@ -17,7 +17,7 @@ const cardTypes: FlashcardType[] = ["basic", "definition", "cloze", "true_false"
 
 export function FlashcardsPage() {
   const { courseId = "" } = useParams()
-  const { data, addFlashcard, resolveSuggestion } = useStudyData()
+  const { data, addFlashcard, resolveSuggestion, pendingMutations } = useStudyData()
   const course = data.courses.find((item) => item.id === courseId)
   const cards = data.flashcards.filter((card) => card.courseId === courseId)
   const suggestions = data.aiSuggestions.filter((suggestion) => suggestion.courseId === courseId && suggestion.status === "pending")
@@ -45,13 +45,13 @@ export function FlashcardsPage() {
     [appendixRecords, contentBlocks],
   )
 
-  function submitCard(event: FormEvent) {
+  async function submitCard(event: FormEvent) {
     event.preventDefault()
     const [sourceTargetType, sourceTargetId] = sourceValue.split(":") as [FlashcardSource["sourceTargetType"], string]
     const sourceBlock = contentBlocks.find((block) => block.id === sourceTargetId)
     const sourceRecord = appendixRecords.find((record) => record.id === sourceTargetId)
 
-    addFlashcard({
+    await addFlashcard({
       courseId,
       cardType,
       prompt: prompt.trim(),
@@ -126,9 +126,9 @@ export function FlashcardsPage() {
                   <Label>Tags</Label>
                   <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="comma, separated" />
                 </div>
-                <Button type="submit">
+                <Button type="submit" disabled={pendingMutations > 0}>
                   <Plus />
-                  Save card
+                  {pendingMutations > 0 ? "Saving..." : "Save card"}
                 </Button>
               </form>
             </CardContent>
@@ -153,14 +153,14 @@ export function FlashcardsPage() {
                           <p className="text-sm text-muted-foreground">{suggestion.summary}</p>
                         </div>
                         <div className="flex gap-2">
-                          <Button size="sm" onClick={() => resolveSuggestion(suggestion.id, "accepted")}>
+                          <Button size="sm" disabled={pendingMutations > 0} onClick={() => void resolveSuggestion(suggestion.id, "accepted")}>
                             <Check />
                             Accept
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => resolveSuggestion(suggestion.id, "deferred")}>
+                          <Button size="sm" variant="outline" disabled={pendingMutations > 0} onClick={() => void resolveSuggestion(suggestion.id, "deferred")}>
                             Defer
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => resolveSuggestion(suggestion.id, "rejected")}>
+                          <Button size="sm" variant="ghost" disabled={pendingMutations > 0} onClick={() => void resolveSuggestion(suggestion.id, "rejected")}>
                             <X />
                           </Button>
                         </div>

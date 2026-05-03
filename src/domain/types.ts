@@ -131,6 +131,17 @@ export interface ContentTextAnchor {
   updatedAt: string
 }
 
+export interface ContentBlockVersion {
+  id: string
+  contentBlockId: string
+  version: number
+  content: ContentBlock["content"]
+  plainText: string
+  contentHash?: string
+  createdBy?: string
+  createdAt: string
+}
+
 export interface AppendixTable {
   id: string
   courseId: string
@@ -317,6 +328,17 @@ export interface AiSuggestionTarget {
   targetHash?: string
 }
 
+export interface StudySchedule {
+  id: string
+  courseId: string
+  targetDate?: string
+  dailyGoalMinutes: number
+  dailyNewCards: number
+  algorithmConfig: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
 export interface EntityLink {
   id: string
   courseId: string
@@ -328,6 +350,23 @@ export interface EntityLink {
   anchorId?: string
   metadata?: Record<string, unknown>
   createdMethod: CreatedMethod
+  createdAt: string
+}
+
+export interface Tag {
+  id: string
+  courseId: string
+  name: string
+  slug: string
+  color?: string
+  createdAt: string
+}
+
+export interface Tagging {
+  id: string
+  tagId: string
+  targetType: LinkTargetType
+  targetId: string
   createdAt: string
 }
 
@@ -352,6 +391,7 @@ export interface StudyData {
   courses: Course[]
   courseNodes: CourseNode[]
   contentBlocks: ContentBlock[]
+  contentBlockVersions: ContentBlockVersion[]
   contentTextAnchors: ContentTextAnchor[]
   appendixTables: AppendixTable[]
   appendixFields: AppendixField[]
@@ -363,8 +403,11 @@ export interface StudyData {
   flashcardSources: FlashcardSource[]
   reviewSessions: ReviewSession[]
   reviewAttempts: ReviewAttempt[]
+  studySchedules: StudySchedule[]
   aiSuggestions: AiSuggestion[]
   aiSuggestionTargets: AiSuggestionTarget[]
   entityLinks: EntityLink[]
+  tags: Tag[]
+  taggings: Tagging[]
   metrics: CourseMetrics[]
 }

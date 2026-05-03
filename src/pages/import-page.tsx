@@ -12,15 +12,15 @@ import { useStudyData } from "@/state/study-data"
 
 export function ImportPage() {
   const { courseId = "" } = useParams()
-  const { data, importTextToNode } = useStudyData()
+  const { data, importTextToNode, pendingMutations } = useStudyData()
   const nodes = data.courseNodes.filter((node) => node.courseId === courseId)
   const [nodeId, setNodeId] = useState(nodes[0]?.id ?? "")
   const [text, setText] = useState("")
   const [importedCount, setImportedCount] = useState<number | null>(null)
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault()
-    const count = importTextToNode(courseId, nodeId, text)
+    const count = await importTextToNode(courseId, nodeId, text)
     setImportedCount(count)
     setText("")
   }
@@ -55,9 +55,9 @@ export function ImportPage() {
                 <Label>Pasted material</Label>
                 <Textarea value={text} onChange={(event) => setText(event.target.value)} className="min-h-72 font-mono" />
               </div>
-              <Button type="submit" disabled={!text.trim()}>
+              <Button type="submit" disabled={!text.trim() || pendingMutations > 0}>
                 <Upload />
-                Import blocks
+                {pendingMutations > 0 ? "Importing..." : "Import blocks"}
               </Button>
               {importedCount !== null && <Badge variant="success">{importedCount} blocks imported</Badge>}
             </form>

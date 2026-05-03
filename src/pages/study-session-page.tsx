@@ -21,7 +21,7 @@ function cardsForMode(cards: Flashcard[], mode: string) {
 
 export function StudySessionPage() {
   const { courseId = "", sessionId = "due" } = useParams()
-  const { data, reviewFlashcard } = useStudyData()
+  const { data, reviewFlashcard, pendingMutations, mode } = useStudyData()
   const [index, setIndex] = useState(0)
   const [revealed, setRevealed] = useState(false)
   const [answer, setAnswer] = useState("")
@@ -30,9 +30,9 @@ export function StudySessionPage() {
   const card = sessionCards[index]
   const progress = sessionCards.length ? (index / sessionCards.length) * 100 : 100
 
-  function rate(rating: ReviewRating) {
+  async function rate(rating: ReviewRating) {
     if (!card) return
-    reviewFlashcard(courseId, card.id, rating, answer)
+    await reviewFlashcard(courseId, card.id, rating, answer)
     setAnswer("")
     setRevealed(false)
     setIndex((current) => Math.min(current + 1, sessionCards.length))
@@ -59,7 +59,9 @@ export function StudySessionPage() {
                 <CheckCircle2 className="size-6" />
               </div>
               <CardTitle>Session complete</CardTitle>
-              <CardDescription>You worked through this queue. Updated due dates and mastery are saved locally.</CardDescription>
+              <CardDescription>
+                You worked through this queue. Updated due dates and mastery are saved {mode === "live" ? "to Supabase" : "locally"}.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <Button asChild>
@@ -98,17 +100,17 @@ export function StudySessionPage() {
                   </Button>
                 ) : (
                   <>
-                    <Button variant="destructive" className="w-full" onClick={() => rate("again")}>
+                    <Button variant="destructive" className="w-full" disabled={pendingMutations > 0} onClick={() => void rate("again")}>
                       <RotateCcw />
                       Again
                     </Button>
-                    <Button variant="outline" className="w-full" onClick={() => rate("hard")}>
+                    <Button variant="outline" className="w-full" disabled={pendingMutations > 0} onClick={() => void rate("hard")}>
                       Hard
                     </Button>
-                    <Button variant="secondary" className="w-full" onClick={() => rate("good")}>
+                    <Button variant="secondary" className="w-full" disabled={pendingMutations > 0} onClick={() => void rate("good")}>
                       Good
                     </Button>
-                    <Button className="w-full" onClick={() => rate("easy")}>
+                    <Button className="w-full" disabled={pendingMutations > 0} onClick={() => void rate("easy")}>
                       Easy
                     </Button>
                   </>
