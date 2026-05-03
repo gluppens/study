@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 42 29% 97%;
+    --foreground: 222 25% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 25% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 25% 12%;
+    --primary: 176 63% 29%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 41 82% 91%;
+    --secondary-foreground: 222 25% 12%;
+    --muted: 210 18% 93%;
+    --muted-foreground: 218 10% 42%;
+    --accent: 351 75% 92%;
+    --accent-foreground: 348 59% 25%;
+    --destructive: 0 72% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 16% 84%;
+    --input: 210 16% 84%;
+    --ring: 176 63% 29%;
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::selection {
+    background: hsl(176 63% 29% / 0.18);
+  }
+}
+
+@layer components {
+  .study-grid {
+    background-image:
+      linear-gradient(hsl(210 16% 84% / 0.45) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(210 16% 84% / 0.45) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  .sentence-line {
+    display: block;
+    margin-block: 0.22rem;
+  }
+}
