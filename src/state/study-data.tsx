@@ -33,6 +33,8 @@ import { slugify, uid } from "@/lib/utils"
 import { defaultStudyData } from "./demo-data"
 
 const storageKey = "study.mvp.data"
+const seedVersionKey = "study.mvp.seedVersion"
+const demoSeedVersion = "2026-05-expanded-demo"
 
 interface CreateCourseInput {
   title: string
@@ -102,6 +104,18 @@ function safeParseData(value: string | null): StudyData {
   } catch {
     return defaultStudyData
   }
+}
+
+function loadInitialStudyData(): StudyData {
+  const storedSeedVersion = localStorage.getItem(seedVersionKey)
+
+  if (storedSeedVersion !== demoSeedVersion) {
+    localStorage.setItem(seedVersionKey, demoSeedVersion)
+    localStorage.setItem(storageKey, JSON.stringify(defaultStudyData))
+    return defaultStudyData
+  }
+
+  return safeParseData(localStorage.getItem(storageKey))
 }
 
 function createDefaultAppendixTables(courseId: string): AppendixTable[] {
@@ -245,7 +259,7 @@ function recalculateMetrics(data: StudyData): StudyData {
 }
 
 export function StudyDataProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<StudyData>(() => safeParseData(localStorage.getItem(storageKey)))
+  const [data, setData] = useState<StudyData>(() => loadInitialStudyData())
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(data))
@@ -256,6 +270,7 @@ export function StudyDataProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const resetDemoData = useCallback(() => {
+    localStorage.setItem(seedVersionKey, demoSeedVersion)
     setData(defaultStudyData)
   }, [])
 
